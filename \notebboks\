@@ -1,0 +1,681 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/Shanmuganathan75/QM640-WALSH-CAPSTONE/blob/main/%5Cnotebboks%5C\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "8de1dff1",
+      "metadata": {
+        "id": "8de1dff1"
+      },
+      "source": [
+        "# QM 640 Capstone — Step 1: EDGAR Event Identification\n",
+        "\n",
+        "Enterprise AI Investment and Stock Market Performance: An Event Study\n",
+        "\n",
+        "Searches SEC EDGAR full-text search for 8-K filings that mention AI-related\n",
+        "investment/partnership/R&D/M&A activity."
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "c3873d2a",
+      "metadata": {
+        "id": "c3873d2a"
+      },
+      "source": [
+        "## Cell 1 — Clone (or pull) the repo\n",
+        "\n",
+        "Run this first, every session. `BASE_DIR` is the single fixed path every\n",
+        "other cell in this notebook reads from and writes to."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "b6dcff73",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "b6dcff73",
+        "outputId": "6c7cd7e0-8ead-44b1-89ba-82876b3cd4f8"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Already up to date.\n",
+            "Repo ready at: /content/QM640-WALSH-CAPSTONE\n"
+          ]
+        }
+      ],
+      "source": [
+        "import os\n",
+        "from google.colab import userdata\n",
+        "\n",
+        "GITHUB_USERNAME = \"Shanmuganathan75\"      # edit if different\n",
+        "REPO_NAME = \"QM640-WALSH-CAPSTONE\"        # must match the repo URL EXACTLY (hyphens included)\n",
+        "GITHUB_TOKEN = userdata.get('GITHUB_TOKEN')  # set once via Colab Secrets (key icon, left sidebar)\n",
+        "\n",
+        "BASE_DIR = f\"/content/{REPO_NAME}\"\n",
+        "remote_url = f\"https://{GITHUB_TOKEN}@github.com/{GITHUB_USERNAME}/{REPO_NAME}.git\"\n",
+        "\n",
+        "if not os.path.exists(os.path.join(BASE_DIR, \".git\")):\n",
+        "    # Wipe any stale/incomplete folder from a previous failed attempt before retrying\n",
+        "    !rm -rf {BASE_DIR}\n",
+        "    !git clone {remote_url} {BASE_DIR}\n",
+        "else:\n",
+        "    !git -C {BASE_DIR} pull\n",
+        "\n",
+        "# Fail loudly instead of silently continuing with a non-git folder -\n",
+        "# this is exactly the bug that caused \"fatal: not a git repository\" earlier.\n",
+        "if not os.path.exists(os.path.join(BASE_DIR, \".git\")):\n",
+        "    raise RuntimeError(\n",
+        "        f\"Clone failed: no .git folder found at {BASE_DIR}.\\n\"\n",
+        "        f\"Check that GITHUB_USERNAME (\\'{GITHUB_USERNAME}\\') and REPO_NAME \"\n",
+        "        f\"(\\'{REPO_NAME}\\') exactly match your repo URL (case and hyphens \"\n",
+        "        f\"included), and that GITHUB_TOKEN is set in Colab Secrets with \"\n",
+        "        f\"Contents: Read and write access.\"\n",
+        "    )\n",
+        "\n",
+        "for sub in [\"scripts\", \"data/raw\", \"data/processed/returns\", \"results\"]:\n",
+        "    os.makedirs(os.path.join(BASE_DIR, sub), exist_ok=True)\n",
+        "\n",
+        "!git -C {BASE_DIR} config user.email \"Shan_muganathan@yahoo.com\"\n",
+        "!git -C {BASE_DIR} config user.name \"Shanmuganathan Ekambaram\"\n",
+        "\n",
+        "print(\"Repo ready at:\", BASE_DIR)"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "43a49b69",
+      "metadata": {
+        "id": "43a49b69"
+      },
+      "source": [
+        "## Cell 2 — Install dependencies"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "f62291c4",
+      "metadata": {
+        "id": "f62291c4"
+      },
+      "outputs": [],
+      "source": [
+        "!pip install -q requests pandas"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "eca33df1",
+      "metadata": {
+        "id": "eca33df1"
+      },
+      "source": [
+        "## Cell 3 — Configuration\n",
+        "\n",
+        "**Edit `USER_AGENT` below before running** — SEC rejects requests without a\n",
+        "real name and email in this header."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "1685456b",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "1685456b",
+        "outputId": "11b97342-d3ff-4a4a-afd8-2b713eaee222"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Will write output to: /content/QM640-WALSH-CAPSTONE/data/raw/edgar_candidate_events.csv\n"
+          ]
+        }
+      ],
+      "source": [
+        "import os\n",
+        "\n",
+        "# ---------------------------------------------------------------------\n",
+        "# CONFIG - edit before running\n",
+        "# ---------------------------------------------------------------------\n",
+        "USER_AGENT = \"Shanmuganathan Ekambaram QM640 Capstone Shan_muganathan@yahoo.com\"  # SEC REQUIRES a real contact\n",
+        "\n",
+        "OUTPUT_DIR = os.path.join(BASE_DIR, \"data/raw\")\n",
+        "OUTPUT_FILE = os.path.join(OUTPUT_DIR, \"edgar_candidate_events.csv\")\n",
+        "\n",
+        "# Keyword set from Synopsis \"Event identification\" section\n",
+        "KEYWORDS = [] # Initialize KEYWORDS as an empty list\n",
+        "KEYWORDS += [\n",
+        "    '\"AI-powered\"',\n",
+        "    '\"AI solutions\"',\n",
+        "    '\"enterprise AI\"',\n",
+        "    '\"AI model\"',\n",
+        "    '\"AI capabilities\"',\n",
+        "    '\"AI-driven\"',\n",
+        "    '\"generative AI capabilities\"',\n",
+        "    '\"AI chatbot\"',\n",
+        "    '\"AI assistant\"',\n",
+        "    '\"deep learning\"',\n",
+        "    '\"neural network\"',\n",
+        "    '\"AI supercomputer\"',\n",
+        "    '\"AI compute\"',\n",
+        "    '\"AI startup acquisition\"',\n",
+        "    '\"AI division\"',\n",
+        "    '\"AI lab\"',\n",
+        "    '\"AI center of excellence\"',\n",
+        "    '\"computer vision\"',\n",
+        "    '\"natural language processing\"',\n",
+        "]\n",
+        "from datetime import date\n",
+        "END_DATE = date.today().isoformat()\n",
+        "START_DATE = \"2023-01-01\"\n",
+        "FORM_TYPES = \"8-K\"\n",
+        "\n",
+        "SEARCH_URL = \"https://efts.sec.gov/LATEST/search-index\"\n",
+        "HEADERS = {\"User-Agent\": USER_AGENT}\n",
+        "\n",
+        "print(\"Will write output to:\", OUTPUT_FILE)\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "88bae8dc",
+      "metadata": {
+        "id": "88bae8dc"
+      },
+      "source": [
+        "## Cell 4 — EDGAR search function"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "3e4254d1",
+      "metadata": {
+        "id": "3e4254d1"
+      },
+      "outputs": [],
+      "source": [
+        "import requests\n",
+        "import time\n",
+        "import csv\n",
+        "\n",
+        "\n",
+        "def search_edgar(query, start_date, end_date, forms=\"8-K\"):\n",
+        "    \"\"\"Query EDGAR full-text search, paginating through all hits (10,000 cap).\"\"\"\n",
+        "    results = []\n",
+        "    frm = 0\n",
+        "    page_size = 100\n",
+        "\n",
+        "    while True:\n",
+        "        params = {\n",
+        "            \"q\": query,\n",
+        "            \"forms\": forms,\n",
+        "            \"dateRange\": \"custom\",\n",
+        "            \"startdt\": start_date,\n",
+        "            \"enddt\": end_date,\n",
+        "            \"from\": frm,\n",
+        "        }\n",
+        "        resp = requests.get(SEARCH_URL, params=params, headers=HEADERS, timeout=20)\n",
+        "        resp.raise_for_status()\n",
+        "        data = resp.json()\n",
+        "\n",
+        "        hits = data.get(\"hits\", {}).get(\"hits\", [])\n",
+        "        if not hits:\n",
+        "            break\n",
+        "\n",
+        "        for h in hits:\n",
+        "            src = h.get(\"_source\", {})\n",
+        "            results.append({\n",
+        "                \"query\": query,\n",
+        "                \"cik\": src.get(\"ciks\", [None])[0],\n",
+        "                \"company_name\": src.get(\"display_names\", [None])[0],\n",
+        "                \"form_type\": src.get(\"root_forms\", [None])[0],\n",
+        "                \"file_date\": src.get(\"file_date\"),\n",
+        "                \"accession_no\": h.get(\"_id\"),\n",
+        "                \"adsh\": src.get(\"adsh\"),\n",
+        "                \"file_name\": src.get(\"file_name\") or src.get(\"_id\"),\n",
+        "            })\n",
+        "\n",
+        "        total = data.get(\"hits\", {}).get(\"total\", {}).get(\"value\", 0)\n",
+        "        frm += page_size\n",
+        "        if frm >= total or frm >= 9900:  # EDGAR caps at 10,000 results\n",
+        "            break\n",
+        "\n",
+        "        time.sleep(0.15)  # stay under 10 req/sec\n",
+        "\n",
+        "    return results"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "76066e7b",
+      "metadata": {
+        "id": "76066e7b"
+      },
+      "source": [
+        "## Cell 5 — Run the search and save results"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "f0c68112",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "f0c68112",
+        "outputId": "d0be671e-2850-402e-989f-c72b03e55651"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Searching EDGAR for: \"AI-powered\" ...\n",
+            "  -> 3863 hits\n",
+            "Searching EDGAR for: \"AI solutions\" ...\n",
+            "  -> 884 hits\n",
+            "Searching EDGAR for: \"enterprise AI\" ...\n",
+            "  -> 419 hits\n",
+            "Searching EDGAR for: \"AI model\" ...\n",
+            "  -> 291 hits\n",
+            "Searching EDGAR for: \"AI capabilities\" ...\n",
+            "  -> 958 hits\n",
+            "Searching EDGAR for: \"AI-driven\" ...\n",
+            "  -> 3728 hits\n",
+            "Searching EDGAR for: \"generative AI capabilities\" ...\n",
+            "  -> 108 hits\n",
+            "Searching EDGAR for: \"AI chatbot\" ...\n",
+            "  -> 61 hits\n",
+            "Searching EDGAR for: \"AI assistant\" ...\n",
+            "  -> 124 hits\n",
+            "Searching EDGAR for: \"deep learning\" ...\n",
+            "  -> 408 hits\n",
+            "Searching EDGAR for: \"neural network\" ...\n",
+            "  -> 120 hits\n",
+            "Searching EDGAR for: \"AI supercomputer\" ...\n",
+            "  -> 22 hits\n",
+            "Searching EDGAR for: \"AI compute\" ...\n",
+            "  -> 258 hits\n",
+            "Searching EDGAR for: \"AI startup acquisition\" ...\n",
+            "  -> 0 hits\n",
+            "Searching EDGAR for: \"AI division\" ...\n",
+            "  -> 23 hits\n",
+            "Searching EDGAR for: \"AI lab\" ...\n",
+            "  -> 27 hits\n",
+            "Searching EDGAR for: \"AI center of excellence\" ...\n",
+            "  -> 17 hits\n",
+            "Searching EDGAR for: \"computer vision\" ...\n",
+            "  -> 418 hits\n",
+            "Searching EDGAR for: \"natural language processing\" ...\n",
+            "  -> 240 hits\n",
+            "\n",
+            "Total unique candidate filings: 8766\n",
+            "Saved to: /content/QM640-WALSH-CAPSTONE/data/raw/edgar_candidate_events.csv\n"
+          ]
+        }
+      ],
+      "source": [
+        "import requests\n",
+        "import time\n",
+        "import csv\n",
+        "\n",
+        "\n",
+        "all_rows = []\n",
+        "seen_accessions = set()\n",
+        "\n",
+        "for kw in KEYWORDS:\n",
+        "    print(f\"Searching EDGAR for: {kw} ...\")\n",
+        "    try:\n",
+        "        rows = search_edgar(kw, START_DATE, END_DATE, FORM_TYPES)\n",
+        "        print(f\"  -> {len(rows)} hits\")\n",
+        "        for r in rows:\n",
+        "            if r[\"accession_no\"] not in seen_accessions:\n",
+        "                seen_accessions.add(r[\"accession_no\"])\n",
+        "                all_rows.append(r)\n",
+        "    except requests.exceptions.HTTPError as e:\n",
+        "        print(f\"  -> WARNING: HTTP Error for '{kw}': {e}. Skipping this keyword.\")\n",
+        "    time.sleep(0.5)\n",
+        "\n",
+        "with open(OUTPUT_FILE, \"w\", newline=\"\", encoding=\"utf-8\") as f:\n",
+        "    writer = csv.DictWriter(f, fieldnames=[\n",
+        "        \"query\", \"cik\", \"company_name\", \"form_type\",\n",
+        "        \"file_date\", \"accession_no\", \"adsh\", \"file_name\"\n",
+        "    ])\n",
+        "    writer.writeheader()\n",
+        "    writer.writerows(all_rows)\n",
+        "\n",
+        "print(f\"\\nTotal unique candidate filings: {len(all_rows)}\")\n",
+        "print(f\"Saved to: {OUTPUT_FILE}\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "8810aa8a",
+      "metadata": {
+        "id": "8810aa8a"
+      },
+      "source": [
+        "## Commit and push results back to GitHub"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "61931041",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "61931041",
+        "outputId": "0b738791-05b0-4c7a-c25c-a1fa47f79e23"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "[main 06775eb] Step 1: EDGAR candidate event search\n",
+            " 1 file changed, 625 insertions(+), 629 deletions(-)\n",
+            "Enumerating objects: 9, done.\n",
+            "Counting objects: 100% (9/9), done.\n",
+            "Delta compression using up to 2 threads\n",
+            "Compressing objects: 100% (5/5), done.\n",
+            "Writing objects: 100% (5/5), 14.06 KiB | 719.00 KiB/s, done.\n",
+            "Total 5 (delta 3), reused 0 (delta 0), pack-reused 0\n",
+            "remote: Resolving deltas: 100% (3/3), completed with 3 local objects.\u001b[K\n",
+            "To https://github.com/Shanmuganathan75/QM640-WALSH-CAPSTONE.git\n",
+            "   e98403d..06775eb  main -> main\n"
+          ]
+        }
+      ],
+      "source": [
+        "!git -C {BASE_DIR} add \"data/raw/edgar_candidate_events.csv\"\n",
+        "!git -C {BASE_DIR} commit -m \"Step 1: EDGAR candidate event search\"\n",
+        "!git -C {BASE_DIR} push"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "a2f6006c",
+      "metadata": {
+        "id": "a2f6006c"
+      },
+      "source": [
+        "## Sanity check"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "cb630f5f",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 310
+        },
+        "id": "cb630f5f",
+        "outputId": "3715ba97-85e2-4739-8477-d20644d17841"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Shape: (8766, 8)\n"
+          ]
+        },
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": [
+              "          query      cik                                       company_name  \\\n",
+              "0  \"AI-powered\"  1566610  Verb Technology Company, Inc.  (VERB)  (CIK 00...   \n",
+              "1  \"AI-powered\"  1833769          Hyperfine, Inc.  (HYPR)  (CIK 0001833769)   \n",
+              "2  \"AI-powered\"  1173204          Cineverse Corp.  (CNVS)  (CIK 0001173204)   \n",
+              "3  \"AI-powered\"   790526             RadNet, Inc.  (RDNT)  (CIK 0000790526)   \n",
+              "4  \"AI-powered\"  1812727  Reliance Global Group, Inc.  (EZRA)  (CIK 0001...   \n",
+              "\n",
+              "  form_type   file_date                            accession_no  \\\n",
+              "0       8-K  2025-03-04         0001493152-25-008984:ex99-1.htm   \n",
+              "1       8-K  2025-02-11  0001193125-25-023996:d867062dex991.htm   \n",
+              "2       8-K  2026-01-13    0001193125-26-011867:cnvs-ex99_1.htm   \n",
+              "3       8-K  2024-10-11  0001683168-24-007058:radnet_ex9901.htm   \n",
+              "4       8-K  2026-06-25         0001493152-26-030196:ex99-1.htm   \n",
+              "\n",
+              "                   adsh  file_name  \n",
+              "0  0001493152-25-008984        NaN  \n",
+              "1  0001193125-25-023996        NaN  \n",
+              "2  0001193125-26-011867        NaN  \n",
+              "3  0001683168-24-007058        NaN  \n",
+              "4  0001493152-26-030196        NaN  "
+            ],
+            "text/html": [
+              "\n",
+              "  <div id=\"df-5222359d-7857-46f3-a241-22da903e853c\" class=\"colab-df-container\">\n",
+              "    <div>\n",
+              "<style scoped>\n",
+              "    .dataframe tbody tr th:only-of-type {\n",
+              "        vertical-align: middle;\n",
+              "    }\n",
+              "\n",
+              "    .dataframe tbody tr th {\n",
+              "        vertical-align: top;\n",
+              "    }\n",
+              "\n",
+              "    .dataframe thead th {\n",
+              "        text-align: right;\n",
+              "    }\n",
+              "</style>\n",
+              "<table border=\"1\" class=\"dataframe\">\n",
+              "  <thead>\n",
+              "    <tr style=\"text-align: right;\">\n",
+              "      <th></th>\n",
+              "      <th>query</th>\n",
+              "      <th>cik</th>\n",
+              "      <th>company_name</th>\n",
+              "      <th>form_type</th>\n",
+              "      <th>file_date</th>\n",
+              "      <th>accession_no</th>\n",
+              "      <th>adsh</th>\n",
+              "      <th>file_name</th>\n",
+              "    </tr>\n",
+              "  </thead>\n",
+              "  <tbody>\n",
+              "    <tr>\n",
+              "      <th>0</th>\n",
+              "      <td>\"AI-powered\"</td>\n",
+              "      <td>1566610</td>\n",
+              "      <td>Verb Technology Company, Inc.  (VERB)  (CIK 00...</td>\n",
+              "      <td>8-K</td>\n",
+              "      <td>2025-03-04</td>\n",
+              "      <td>0001493152-25-008984:ex99-1.htm</td>\n",
+              "      <td>0001493152-25-008984</td>\n",
+              "      <td>NaN</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>1</th>\n",
+              "      <td>\"AI-powered\"</td>\n",
+              "      <td>1833769</td>\n",
+              "      <td>Hyperfine, Inc.  (HYPR)  (CIK 0001833769)</td>\n",
+              "      <td>8-K</td>\n",
+              "      <td>2025-02-11</td>\n",
+              "      <td>0001193125-25-023996:d867062dex991.htm</td>\n",
+              "      <td>0001193125-25-023996</td>\n",
+              "      <td>NaN</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>2</th>\n",
+              "      <td>\"AI-powered\"</td>\n",
+              "      <td>1173204</td>\n",
+              "      <td>Cineverse Corp.  (CNVS)  (CIK 0001173204)</td>\n",
+              "      <td>8-K</td>\n",
+              "      <td>2026-01-13</td>\n",
+              "      <td>0001193125-26-011867:cnvs-ex99_1.htm</td>\n",
+              "      <td>0001193125-26-011867</td>\n",
+              "      <td>NaN</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>3</th>\n",
+              "      <td>\"AI-powered\"</td>\n",
+              "      <td>790526</td>\n",
+              "      <td>RadNet, Inc.  (RDNT)  (CIK 0000790526)</td>\n",
+              "      <td>8-K</td>\n",
+              "      <td>2024-10-11</td>\n",
+              "      <td>0001683168-24-007058:radnet_ex9901.htm</td>\n",
+              "      <td>0001683168-24-007058</td>\n",
+              "      <td>NaN</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>4</th>\n",
+              "      <td>\"AI-powered\"</td>\n",
+              "      <td>1812727</td>\n",
+              "      <td>Reliance Global Group, Inc.  (EZRA)  (CIK 0001...</td>\n",
+              "      <td>8-K</td>\n",
+              "      <td>2026-06-25</td>\n",
+              "      <td>0001493152-26-030196:ex99-1.htm</td>\n",
+              "      <td>0001493152-26-030196</td>\n",
+              "      <td>NaN</td>\n",
+              "    </tr>\n",
+              "  </tbody>\n",
+              "</table>\n",
+              "</div>\n",
+              "    <div class=\"colab-df-buttons\">\n",
+              "\n",
+              "  <div class=\"colab-df-container\">\n",
+              "    <button class=\"colab-df-convert\" onclick=\"convertToInteractive('df-5222359d-7857-46f3-a241-22da903e853c')\"\n",
+              "            title=\"Convert this dataframe to an interactive table.\"\n",
+              "            style=\"display:none;\">\n",
+              "\n",
+              "  <svg xmlns=\"http://www.w3.org/2000/svg\" height=\"24px\" viewBox=\"0 -960 960 960\">\n",
+              "    <path d=\"M120-120v-720h720v720H120Zm60-500h600v-160H180v160Zm220 220h160v-160H400v160Zm0 220h160v-160H400v160ZM180-400h160v-160H180v160Zm440 0h160v-160H620v160ZM180-180h160v-160H180v160Zm440 0h160v-160H620v160Z\"/>\n",
+              "  </svg>\n",
+              "    </button>\n",
+              "\n",
+              "  <style>\n",
+              "    .colab-df-container {\n",
+              "      display:flex;\n",
+              "      gap: 12px;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-convert {\n",
+              "      background-color: #E8F0FE;\n",
+              "      border: none;\n",
+              "      border-radius: 50%;\n",
+              "      cursor: pointer;\n",
+              "      display: none;\n",
+              "      fill: #1967D2;\n",
+              "      height: 32px;\n",
+              "      padding: 0 0 0 0;\n",
+              "      width: 32px;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-convert:hover {\n",
+              "      background-color: #E2EBFA;\n",
+              "      box-shadow: 0px 1px 2px rgba(60, 64, 67, 0.3), 0px 1px 3px 1px rgba(60, 64, 67, 0.15);\n",
+              "      fill: #174EA6;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-buttons div {\n",
+              "      margin-bottom: 4px;\n",
+              "    }\n",
+              "\n",
+              "    [theme=dark] .colab-df-convert {\n",
+              "      background-color: #3B4455;\n",
+              "      fill: #D2E3FC;\n",
+              "    }\n",
+              "\n",
+              "    [theme=dark] .colab-df-convert:hover {\n",
+              "      background-color: #434B5C;\n",
+              "      box-shadow: 0px 1px 3px 1px rgba(0, 0, 0, 0.15);\n",
+              "      filter: drop-shadow(0px 1px 2px rgba(0, 0, 0, 0.3));\n",
+              "      fill: #FFFFFF;\n",
+              "    }\n",
+              "  </style>\n",
+              "\n",
+              "    <script>\n",
+              "      const buttonEl =\n",
+              "        document.querySelector('#df-5222359d-7857-46f3-a241-22da903e853c button.colab-df-convert');\n",
+              "      buttonEl.style.display =\n",
+              "        google.colab.kernel.accessAllowed ? 'block' : 'none';\n",
+              "\n",
+              "      async function convertToInteractive(key) {\n",
+              "        const element = document.querySelector('#df-5222359d-7857-46f3-a241-22da903e853c');\n",
+              "        const dataTable =\n",
+              "          await google.colab.kernel.invokeFunction('convertToInteractive',\n",
+              "                                                    [key], {});\n",
+              "        if (!dataTable) return;\n",
+              "\n",
+              "        const docLinkHtml = 'Like what you see? Visit the ' +\n",
+              "          '<a target=\"_blank\" href=https://colab.research.google.com/notebooks/data_table.ipynb>data table notebook</a>'\n",
+              "          + ' to learn more about interactive tables.';\n",
+              "        element.innerHTML = '';\n",
+              "        dataTable['output_type'] = 'display_data';\n",
+              "        await google.colab.output.renderOutput(dataTable, element);\n",
+              "        const docLink = document.createElement('div');\n",
+              "        docLink.innerHTML = docLinkHtml;\n",
+              "        element.appendChild(docLink);\n",
+              "      }\n",
+              "    </script>\n",
+              "  </div>\n",
+              "\n",
+              "\n",
+              "    </div>\n",
+              "  </div>\n"
+            ],
+            "application/vnd.google.colaboratory.intrinsic+json": {
+              "type": "dataframe",
+              "variable_name": "df",
+              "summary": "{\n  \"name\": \"df\",\n  \"rows\": 8766,\n  \"fields\": [\n    {\n      \"column\": \"query\",\n      \"properties\": {\n        \"dtype\": \"category\",\n        \"num_unique_values\": 17,\n        \"samples\": [\n          \"\\\"AI-powered\\\"\",\n          \"\\\"AI solutions\\\"\",\n          \"\\\"AI-driven\\\"\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"cik\",\n      \"properties\": {\n        \"dtype\": \"number\",\n        \"std\": 448258,\n        \"min\": 1750,\n        \"max\": 2119322,\n        \"num_unique_values\": 1636,\n        \"samples\": [\n          851205,\n          1869105,\n          1120914\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"company_name\",\n      \"properties\": {\n        \"dtype\": \"category\",\n        \"num_unique_values\": 1847,\n        \"samples\": [\n          \"ENTEGRIS INC  (ENTG)  (CIK 0001101302)\",\n          \"ELECTRO SENSORS INC  (ELSE)  (CIK 0000351789)\",\n          \"AMAZE HOLDINGS, INC.  (AMZE)  (CIK 0001880343)\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"form_type\",\n      \"properties\": {\n        \"dtype\": \"category\",\n        \"num_unique_values\": 1,\n        \"samples\": [\n          \"8-K\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"file_date\",\n      \"properties\": {\n        \"dtype\": \"object\",\n        \"num_unique_values\": 870,\n        \"samples\": [\n          \"2023-09-14\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"accession_no\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 8766,\n        \"samples\": [\n          \"0001477932-23-002822:pvnc_ex991.htm\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"adsh\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 7850,\n        \"samples\": [\n          \"0001193125-25-039204\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"file_name\",\n      \"properties\": {\n        \"dtype\": \"number\",\n        \"std\": null,\n        \"min\": null,\n        \"max\": null,\n        \"num_unique_values\": 0,\n        \"samples\": [],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    }\n  ]\n}"
+            }
+          },
+          "metadata": {},
+          "execution_count": 7
+        }
+      ],
+      "source": [
+        "import pandas as pd\n",
+        "\n",
+        "df = pd.read_csv(OUTPUT_FILE)\n",
+        "print(\"Shape:\", df.shape)\n",
+        "df.head()"
+      ]
+    }
+  ],
+  "metadata": {
+    "colab": {
+      "provenance": [],
+      "gpuType": "T4",
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "display_name": "Python 3",
+      "name": "python3"
+    },
+    "accelerator": "GPU"
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}
