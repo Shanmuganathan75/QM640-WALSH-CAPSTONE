@@ -1,3 +1,3 @@
 run_id,notebook,status,start_time,end_time,duration_seconds,failed_stage,error_message
 20260726T131636-01a2e0,03c_automated_flags,success,2026-07-26T13:16:36.253714+00:00,2026-07-26T13:17:38.352861+00:00,62.1,,
-20260726T132349-9c23fe,03d_item_code_filter,running,2026-07-26T13:23:49.496239+00:00,,,,
+20260726T132349-9c23fe,03d_item_code_filter,success,2026-07-26T13:23:49.496239+00:00,2026-07-26T13:33:12.900055+00:00,563.4,,
