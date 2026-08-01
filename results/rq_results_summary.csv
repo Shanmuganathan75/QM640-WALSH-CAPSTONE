@@ -1,0 +1,5 @@
+RQ,method,statistic,p_value,n,CAAR,eta_squared,r_squared,adj_r_squared,mean_diff
+RQ1,Wilcoxon signed-rank (non-parametric fallback),41386.0,0.0024255108666968303,445,-0.052970521874041554,,,,
+RQ2,Kruskal-Wallis (non-parametric fallback),1.0805678051497125,0.5825828321273758,445,,0.0030753751646899253,,,
+RQ3,multiple regression with interaction,0.4310407915768971,0.8269837211616189,444,,,0.004896463653058847,-0.006463165757294442,
+RQ4,independent-samples t-test,0.955362176876284,0.3399167835613065,444,,,,,0.11622184266883291
